@@ -6,10 +6,12 @@
 
 *.coverprofile
 *.html
+*.DS_Store
 .vscode
 .idea
-.DS_Store
+controller_manager
 
 ./machine-controller-manager
 ./managevm
+./controller-manager
 TODO
