@@ -32,7 +32,12 @@ func createFakeController(
 	stop <-chan struct{},
 	namespace string,
 	targetCoreObjects []runtime.Object,
-) (kubernetes.Interface, corelisters.PersistentVolumeLister, corelisters.PersistentVolumeClaimLister, *customfake.FakeObjectTracker) {
+) (
+	kubernetes.Interface,
+	corelisters.PersistentVolumeLister,
+	corelisters.PersistentVolumeClaimLister,
+	corelisters.NodeLister,
+	*customfake.FakeObjectTracker) {
 
 	fakeTargetCoreClient, targetCoreObjectTracker := customfake.NewCoreClientSet(targetCoreObjects...)
 	go targetCoreObjectTracker.Start()
@@ -47,9 +52,11 @@ func createFakeController(
 	coreTargetSharedInformers := coreTargetInformerFactory.Core().V1()
 	pvcs := coreTargetSharedInformers.PersistentVolumeClaims()
 	pvs := coreTargetSharedInformers.PersistentVolumes()
+	nodes := coreTargetSharedInformers.Nodes()
 
 	pvcLister := pvcs.Lister()
 	pvLister := pvs.Lister()
+	nodeLister := nodes.Lister()
 
-	return fakeTargetCoreClient, pvLister, pvcLister, targetCoreObjectTracker
+	return fakeTargetCoreClient, pvLister, pvcLister, nodeLister, targetCoreObjectTracker
 }

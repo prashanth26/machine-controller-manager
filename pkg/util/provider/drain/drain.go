@@ -65,6 +65,7 @@ type Options struct {
 	pvcLister                    corelisters.PersistentVolumeClaimLister
 	pvLister                     corelisters.PersistentVolumeLister
 	pdbLister                    policylisters.PodDisruptionBudgetLister
+	nodeLister                   corelisters.NodeLister
 	drainStartedOn               time.Time
 	drainEndedOn                 time.Time
 }
@@ -72,11 +73,20 @@ type Options struct {
 // Takes a pod and returns a bool indicating whether or not to operate on the
 // pod, an optional warning message, and an optional fatal error.
 type podFilter func(api.Pod) (include bool, w *warning, f *fatal)
+
 type warning struct {
 	string
 }
+
 type fatal struct {
 	string
+}
+
+// PodVolumeInfo is the struct used to hold the PersistantVolumeID and volumeID
+// for all the PVs attached to the pod
+type PodVolumeInfo struct {
+	persistantVolumeList []string
+	volumeList           []string
 }
 
 const (
@@ -136,6 +146,7 @@ func NewDrainOptions(
 	pvcLister corelisters.PersistentVolumeClaimLister,
 	pvLister corelisters.PersistentVolumeLister,
 	pdbLister policylisters.PodDisruptionBudgetLister,
+	nodeLister corelisters.NodeLister,
 ) *Options {
 
 	return &Options{
@@ -155,6 +166,7 @@ func NewDrainOptions(
 		pvcLister:                    pvcLister,
 		pvLister:                     pvLister,
 		pdbLister:                    pdbLister,
+		nodeLister:                   nodeLister,
 	}
 
 }
@@ -477,31 +489,40 @@ func sortPodsByPriority(pods []*corev1.Pod) {
 	})
 }
 
-// doAccountingOfPvs returns the map with keys as pod names and values as array of attached volumes' IDs
-func (o *Options) doAccountingOfPvs(pods []*corev1.Pod) map[string][]string {
-	volMap := make(map[string][]string)
-	pvMap := make(map[string][]string)
+// doAccountingOfPvs returns a map with the key as a hash of
+// pod-namespace/pod-name and value as a PodVolumeInfo object
+func (o *Options) doAccountingOfPvs(pods []*corev1.Pod) map[string]PodVolumeInfo {
+	var (
+		pvMap            = make(map[string][]string)
+		podVolumeInfoMap = make(map[string]PodVolumeInfo)
+	)
 
 	for _, pod := range pods {
-		podPVs, _ := o.getPvs(pod)
-		pvMap[pod.Namespace+"/"+pod.Name] = podPVs
+		podPVs, _ := o.getPVList(pod)
+		pvMap[getPodHash(pod)] = podPVs
 	}
 	klog.V(4).Info("PV map: ", pvMap)
 
+	// Filter the list of shared PVs
 	filterSharedPVs(pvMap)
 
-	for i := range pvMap {
-		pvList := pvMap[i]
-		vols, err := o.getVolIDsFromDriver(pvList)
+	for podHash, persistantVolumeList := range pvMap {
+		volumeList, err := o.getVolIDsFromDriver(persistantVolumeList)
 		if err != nil {
 			// In case of error, log and skip this set of volumes
-			klog.Errorf("Error getting volume ID from cloud provider. Skipping volumes for pod: %v. Err: %v", i, err)
+			klog.Errorf("Error getting volume ID from cloud provider. Skipping volumes for pod: %v. Err: %v", podHash, err)
 			continue
 		}
-		volMap[i] = vols
+
+		podVolumeInfo := PodVolumeInfo{
+			persistantVolumeList: persistantVolumeList,
+			volumeList:           volumeList,
+		}
+		podVolumeInfoMap[podHash] = podVolumeInfo
 	}
-	klog.V(4).Info("Volume map: ", volMap)
-	return volMap
+	klog.V(4).Infof("PodVolumeInfoMap = %v", podVolumeInfoMap)
+
+	return podVolumeInfoMap
 }
 
 // filterSharedPVs filters out the PVs that are shared among pods.
@@ -548,7 +569,7 @@ func (o *Options) evictPodsWithPv(attemptEvict bool, pods []*corev1.Pod,
 ) {
 	sortPodsByPriority(pods)
 
-	volMap := o.doAccountingOfPvs(pods)
+	podVolumeInfoMap := o.doAccountingOfPvs(pods)
 
 	var (
 		remainingPods []*api.Pod
@@ -558,7 +579,7 @@ func (o *Options) evictPodsWithPv(attemptEvict bool, pods []*corev1.Pod,
 
 	if attemptEvict {
 		for i := 0; i < nretries; i++ {
-			remainingPods, fastTrack = o.evictPodsWithPVInternal(attemptEvict, pods, volMap, policyGroupVersion, getPodFn, returnCh)
+			remainingPods, fastTrack = o.evictPodsWithPVInternal(attemptEvict, pods, podVolumeInfoMap, policyGroupVersion, getPodFn, returnCh)
 			if fastTrack || len(remainingPods) == 0 {
 				//Either all pods got evicted or we need to fast track the return (node deletion detected)
 				break
@@ -576,10 +597,10 @@ func (o *Options) evictPodsWithPv(attemptEvict bool, pods []*corev1.Pod,
 		if !fastTrack && len(remainingPods) > 0 {
 			// Force delete the pods remaining after evict retries.
 			pods = remainingPods
-			remainingPods, _ = o.evictPodsWithPVInternal(false, pods, volMap, policyGroupVersion, getPodFn, returnCh)
+			remainingPods, _ = o.evictPodsWithPVInternal(false, pods, podVolumeInfoMap, policyGroupVersion, getPodFn, returnCh)
 		}
 	} else {
-		remainingPods, _ = o.evictPodsWithPVInternal(false, pods, volMap, policyGroupVersion, getPodFn, returnCh)
+		remainingPods, _ = o.evictPodsWithPVInternal(false, pods, podVolumeInfoMap, policyGroupVersion, getPodFn, returnCh)
 	}
 
 	// Placate the caller by returning the nil status for the remaining pods.
@@ -599,10 +620,14 @@ func (o *Options) evictPodsWithPv(attemptEvict bool, pods []*corev1.Pod,
 	return
 }
 
-func (o *Options) evictPodsWithPVInternal(attemptEvict bool, pods []*corev1.Pod, volMap map[string][]string,
+func (o *Options) evictPodsWithPVInternal(
+	attemptEvict bool,
+	pods []*corev1.Pod,
+	podVolumeInfoMap map[string]PodVolumeInfo,
 	policyGroupVersion string,
 	getPodFn func(namespace, name string) (*api.Pod, error),
-	returnCh chan error) (remainingPods []*api.Pod, fastTrack bool) {
+	returnCh chan error,
+) (remainingPods []*api.Pod, fastTrack bool) {
 	var (
 		mainContext       context.Context
 		cancelMainContext context.CancelFunc
@@ -668,9 +693,9 @@ func (o *Options) evictPodsWithPVInternal(attemptEvict bool, pods []*corev1.Pod,
 			time.Since(podEvictionStartTime),
 		)
 
-		pvs := volMap[pod.Namespace+"/"+pod.Name]
+		podVolumeInfo := podVolumeInfoMap[getPodHash(pod)]
 		ctx, cancelFn := context.WithTimeout(mainContext, o.getTerminationGracePeriod(pod)+o.PvDetachTimeout)
-		err = o.waitForDetach(ctx, pvs, o.nodeName)
+		err = o.waitForDetach(ctx, podVolumeInfo, o.nodeName)
 		cancelFn()
 
 		if apierrors.IsNotFound(err) {
@@ -689,13 +714,19 @@ func (o *Options) evictPodsWithPVInternal(attemptEvict bool, pods []*corev1.Pod,
 			pod.Spec.NodeName,
 			time.Since(podEvictionStartTime),
 		)
+
+		// Reattach to consider 3 cases
+		// 1. If CSI is enabled use determine reattach
+		// 2. If CSI isn't enabled, use node objects to determine reattach
+		// If all else fails, fallback to static timeout
+
 		returnCh <- nil
 	}
 
 	return retryPods, false
 }
 
-func (o *Options) getPvs(pod *corev1.Pod) ([]string, error) {
+func (o *Options) getPVList(pod *corev1.Pod) ([]string, error) {
 	pvs := []string{}
 	for i := range pod.Spec.Volumes {
 		vol := &pod.Spec.Volumes[i]
@@ -731,14 +762,14 @@ func (o *Options) getPvs(pod *corev1.Pod) ([]string, error) {
 	return pvs, nil
 }
 
-func (o *Options) waitForDetach(ctx context.Context, volumeIDs []string, nodeName string) error {
-	if volumeIDs == nil || len(volumeIDs) == 0 || nodeName == "" {
+func (o *Options) waitForDetach(ctx context.Context, podVolumeInfo PodVolumeInfo, nodeName string) error {
+	if len(podVolumeInfo.volumeList) == 0 || nodeName == "" {
 		// If volume or node name is not available, nothing to do. Just log this as warning
-		klog.Warningf("Node name: %q, list of pod PVs to wait for detach: %v", nodeName, volumeIDs)
+		klog.Warningf("Node name: %q, list of pod PVs to wait for detach: %v", nodeName, podVolumeInfo.volumeList)
 		return nil
 	}
 
-	klog.V(4).Info("Waiting for following volumes to detach: ", volumeIDs)
+	klog.V(4).Info("Waiting for following volumes to detach: ", podVolumeInfo.volumeList)
 
 	found := true
 
@@ -753,6 +784,10 @@ func (o *Options) waitForDetach(ctx context.Context, volumeIDs []string, nodeNam
 		found = false
 
 		node, err := o.client.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+		// klog.Error(node.Status)
+		// node, err := o.nodeLister.Get(nodeName)
+		// klog.Error(node.Status)
+
 		if apierrors.IsNotFound(err) {
 			klog.V(4).Info("Node not found: ", nodeName)
 			return err
@@ -769,18 +804,17 @@ func (o *Options) waitForDetach(ctx context.Context, volumeIDs []string, nodeNam
 		}
 
 	LookUpVolume:
-		for i := range volumeIDs {
-			volumeID := &volumeIDs[i]
+		for _, volumeID := range podVolumeInfo.volumeList {
 
 			for j := range attachedVols {
 				attachedVol := &attachedVols[j]
 
-				found, _ = regexp.MatchString(*volumeID, string(attachedVol.Name))
+				found, _ = regexp.MatchString(volumeID, string(attachedVol.Name))
 
 				if found {
 					klog.V(4).Infof(
 						"Found volume:%s still attached to node %q. Will re-check in %s",
-						*volumeID,
+						volumeID,
 						nodeName,
 						VolumeDetachPollInterval,
 					)
@@ -791,7 +825,9 @@ func (o *Options) waitForDetach(ctx context.Context, volumeIDs []string, nodeNam
 		}
 	}
 
-	klog.V(4).Infof("Detached volumes:%s from node %q", volumeIDs, nodeName)
+	// TODO: Add reattch logic here
+
+	klog.V(4).Infof("Detached volumes:%s from node %q", podVolumeInfo.volumeList, nodeName)
 	return nil
 }
 
@@ -964,7 +1000,7 @@ func SupportEviction(clientset kubernetes.Interface) (string, error) {
 // RunCordonOrUncordon runs either Cordon or Uncordon.  The desired value for
 // "Unschedulable" is passed as the first arg.
 func (o *Options) RunCordonOrUncordon(desired bool) error {
-	node, err := o.client.CoreV1().Nodes().Get(o.nodeName, metav1.GetOptions{})
+	node, err := o.nodeLister.Get(o.nodeName)
 	if err != nil {
 		// Deletion could be triggered when machine is just being created, no node present then
 		return nil

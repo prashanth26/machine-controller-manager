@@ -16,8 +16,6 @@ limitations under the License.
 */ // Package drain is used to drain nodes
 package drain
 
-/*
-TODO: Fix timeout issue for tests
 import (
 	"context"
 	"fmt"
@@ -111,12 +109,15 @@ var _ = Describe("drain", func() {
 		targetCoreObjects = appendPVCs(targetCoreObjects, pvcs)
 		targetCoreObjects = appendPVs(targetCoreObjects, pvs)
 		targetCoreObjects = appendNodes(targetCoreObjects, nodes)
-		fakeTargetCoreClient, fakePVLister, fakePVCLister, tracker := createFakeController(
+		fakeTargetCoreClient, fakePVLister, fakePVCLister, nodeLister, tracker := createFakeController(
 			stop, testNamespace, targetCoreObjects,
 		)
 		defer tracker.Stop()
 
-		//Expect(cache.WaitForCacheSync(stop, fakePVCLister)).To(BeTrue())
+		// Waiting for cache sync
+		// TODO: Replace with actual call
+		// Expect(cache.WaitForCacheSync(stop, fakePVCLister)).To(BeTrue())
+		time.Sleep(time.Millisecond)
 
 		//fakeDriver := driver.NewFakeDriver(driver.FakeDriver{Err: nil,})
 		maxEvictRetries := setup.maxEvictRetries
@@ -139,6 +140,7 @@ var _ = Describe("drain", func() {
 			nodeName:                     testNodeName,
 			pvLister:                     fakePVLister,
 			pvcLister:                    fakePVCLister,
+			nodeLister:                   nodeLister,
 		}
 
 		// Get the pod directly from the ObjectTracker to avoid locking issues in the Fake object.
@@ -214,6 +216,9 @@ var _ = Describe("drain", func() {
 				}
 
 				_, err = nodes.Update(node)
+				fmt.Fprintln(GinkgoWriter, err)
+
+				_, err = nodes.UpdateStatus(node)
 				fmt.Fprintln(GinkgoWriter, err)
 			}
 		}()
@@ -446,7 +451,7 @@ var _ = Describe("drain", func() {
 					nPodsWithExclusiveAndSharedPV: 0,
 				},
 				// Because waitForDetach polling Interval is equal to terminationGracePeriodShort
-				timeout:      terminationGracePeriodDefault,
+				timeout:      time.Minute,
 				drainTimeout: false,
 				drainError:   nil,
 				nEvictions:   0,
@@ -950,4 +955,3 @@ func appendNodes(objects []runtime.Object, nodes []*corev1.Node) []runtime.Objec
 	}
 	return objects
 }
-*/

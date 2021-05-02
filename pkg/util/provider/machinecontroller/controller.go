@@ -124,6 +124,8 @@ func NewController(
 	controller.machineLister = machineInformer.Lister()
 
 	// Controller syncs
+	controller.pvcSynced = pvcInformer.Informer().HasSynced
+	controller.pvSynced = pvInformer.Informer().HasSynced
 	controller.secretSynced = secretInformer.Informer().HasSynced
 	controller.pdbSynced = pdbInformer.Informer().HasSynced
 	controller.machineClassSynced = machineClassInformer.Informer().HasSynced
@@ -223,6 +225,8 @@ type controller struct {
 	machineSafetyOrphanVMsQueue workqueue.RateLimitingInterface
 	machineSafetyAPIServerQueue workqueue.RateLimitingInterface
 	// syncs
+	pvcSynced          cache.InformerSynced
+	pvSynced           cache.InformerSynced
 	secretSynced       cache.InformerSynced
 	pdbSynced          cache.InformerSynced
 	nodeSynced         cache.InformerSynced
@@ -244,7 +248,7 @@ func (c *controller) Run(workers int, stopCh <-chan struct{}) {
 	defer c.machineSafetyOrphanVMsQueue.ShutDown()
 	defer c.machineSafetyAPIServerQueue.ShutDown()
 
-	if !cache.WaitForCacheSync(stopCh, c.secretSynced, c.pdbSynced, c.nodeSynced, c.machineClassSynced, c.machineSynced) {
+	if !cache.WaitForCacheSync(stopCh, c.secretSynced, c.pvcSynced, c.pvSynced, c.pdbSynced, c.nodeSynced, c.machineClassSynced, c.machineSynced) {
 		runtimeutil.HandleError(fmt.Errorf("Timed out waiting for caches to sync"))
 		return
 	}
