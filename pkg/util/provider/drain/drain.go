@@ -783,10 +783,10 @@ func (o *Options) waitForDetach(ctx context.Context, podVolumeInfo PodVolumeInfo
 
 		found = false
 
-		node, err := o.client.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
-		// klog.Error(node.Status)
-		// node, err := o.nodeLister.Get(nodeName)
-		// klog.Error(node.Status)
+		node, _ := o.client.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+		klog.Error(node.Status)
+		node, err := o.nodeLister.Get(nodeName)
+		klog.Error(node.Status)
 
 		if apierrors.IsNotFound(err) {
 			klog.V(4).Info("Node not found: ", nodeName)

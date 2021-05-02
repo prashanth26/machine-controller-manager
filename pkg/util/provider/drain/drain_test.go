@@ -135,7 +135,7 @@ var _ = Describe("drain", func() {
 			MaxEvictRetries:              maxEvictRetries,
 			Out:                          GinkgoWriter,
 			PvDetachTimeout:              3 * time.Minute,
-			Timeout:                      time.Minute,
+			Timeout:                      10 * time.Minute,
 			client:                       fakeTargetCoreClient,
 			nodeName:                     testNodeName,
 			pvLister:                     fakePVLister,
@@ -218,6 +218,7 @@ var _ = Describe("drain", func() {
 				_, err = nodes.Update(node)
 				fmt.Fprintln(GinkgoWriter, err)
 
+				// updatestatus
 				_, err = nodes.UpdateStatus(node)
 				fmt.Fprintln(GinkgoWriter, err)
 			}
@@ -431,7 +432,7 @@ var _ = Describe("drain", func() {
 				// Because waitForDelete polling Interval is equal to terminationGracePeriodShort
 				minDrainDuration: terminationGracePeriodShort,
 			}),
-		Entry("Successful drain without support for eviction of pods with exclusive volumes",
+		FEntry("Successful drain without support for eviction of pods with exclusive volumes",
 			&setup{
 				stats: stats{
 					nPodsWithoutPV:                0,
@@ -451,7 +452,8 @@ var _ = Describe("drain", func() {
 					nPodsWithExclusiveAndSharedPV: 0,
 				},
 				// Because waitForDetach polling Interval is equal to terminationGracePeriodShort
-				timeout:      time.Minute,
+				// TODO: revert timeout value
+				timeout:      5 * time.Minute,
 				drainTimeout: false,
 				drainError:   nil,
 				nEvictions:   0,

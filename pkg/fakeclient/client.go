@@ -39,6 +39,7 @@ import (
 	policyv1beta1 "k8s.io/client-go/kubernetes/typed/policy/v1beta1"
 	fakepolicyv1beta1 "k8s.io/client-go/kubernetes/typed/policy/v1beta1/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/klog"
 )
 
 // FakeObjectTracker implements both k8stesting.ObjectTracker as well as watch.Interface.
@@ -79,6 +80,8 @@ func (t *FakeObjectTracker) Get(gvr schema.GroupVersionResource, ns, name string
 		}
 
 	}
+
+	klog.Errorf("Recieved GET for \n%v \n%v \n%v", gvr, ns, name)
 
 	return t.delegatee.Get(gvr, ns, name)
 }
@@ -130,6 +133,9 @@ func (t *FakeObjectTracker) Update(gvr schema.GroupVersionResource, obj runtime.
 	}
 
 	err := t.delegatee.Update(gvr, obj, ns)
+
+	klog.Errorf("Update for %v %v", obj, err)
+
 	if err != nil {
 		return err
 	}
@@ -141,6 +147,8 @@ func (t *FakeObjectTracker) Update(gvr schema.GroupVersionResource, obj runtime.
 	if t.IsStopped() {
 		return errors.New("Error sending event on a stopped tracker")
 	}
+
+	klog.Errorf("Modified for %v %v", obj, err)
 
 	t.FakeWatcher.Modify(obj)
 	return nil
@@ -480,8 +488,8 @@ func NewFakeObjectTrackers(controlMachine, controlCore, targetCore *FakeObjectTr
 
 // Start starts all object trackers as go routines
 func (o *FakeObjectTrackers) Start() error {
-	go o.ControlMachine.Start()
-	go o.ControlCore.Start()
+	// go o.ControlMachine.Start()
+	// go o.ControlCore.Start()
 	go o.TargetCore.Start()
 
 	return nil
@@ -489,8 +497,8 @@ func (o *FakeObjectTrackers) Start() error {
 
 // Stop stops all object trackers
 func (o *FakeObjectTrackers) Stop() error {
-	o.ControlMachine.Stop()
-	o.ControlCore.Stop()
+	// o.ControlMachine.Stop()
+	// o.ControlCore.Stop()
 	o.TargetCore.Stop()
 
 	return nil

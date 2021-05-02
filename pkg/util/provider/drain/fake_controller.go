@@ -40,15 +40,19 @@ func createFakeController(
 	*customfake.FakeObjectTracker) {
 
 	fakeTargetCoreClient, targetCoreObjectTracker := customfake.NewCoreClientSet(targetCoreObjects...)
-	go targetCoreObjectTracker.Start()
+	fakeObjectTrackers := customfake.NewFakeObjectTrackers(
+		nil,
+		nil,
+		targetCoreObjectTracker,
+	)
+	fakeObjectTrackers.Start()
 
-	coreTargetInformerFactory := coreinformers.NewFilteredSharedInformerFactory(
+	coreTargetInformerFactory := coreinformers.NewSharedInformerFactory(
 		fakeTargetCoreClient,
 		100*time.Millisecond,
-		namespace,
-		nil,
 	)
 	defer coreTargetInformerFactory.Start(stop)
+
 	coreTargetSharedInformers := coreTargetInformerFactory.Core().V1()
 	pvcs := coreTargetSharedInformers.PersistentVolumeClaims()
 	pvs := coreTargetSharedInformers.PersistentVolumes()
