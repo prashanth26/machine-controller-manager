@@ -451,7 +451,7 @@ var _ = Describe("drain", func() {
 					nPodsWithExclusiveAndSharedPV: 0,
 				},
 				// Because waitForDetach polling Interval is equal to terminationGracePeriodShort
-				timeout:      time.Minute,
+				timeout:      terminationGracePeriodDefault,
 				drainTimeout: false,
 				drainError:   nil,
 				nEvictions:   0,

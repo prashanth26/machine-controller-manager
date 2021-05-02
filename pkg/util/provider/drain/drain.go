@@ -1000,7 +1000,8 @@ func SupportEviction(clientset kubernetes.Interface) (string, error) {
 // RunCordonOrUncordon runs either Cordon or Uncordon.  The desired value for
 // "Unschedulable" is passed as the first arg.
 func (o *Options) RunCordonOrUncordon(desired bool) error {
-	node, err := o.nodeLister.Get(o.nodeName)
+	// TODO: Change this to lister call
+	node, err := o.client.CoreV1().Nodes().Get(o.nodeName, metav1.GetOptions{})
 	if err != nil {
 		// Deletion could be triggered when machine is just being created, no node present then
 		return nil
