@@ -109,7 +109,7 @@ var _ = Describe("drain", func() {
 		targetCoreObjects = appendPVCs(targetCoreObjects, pvcs)
 		targetCoreObjects = appendPVs(targetCoreObjects, pvs)
 		targetCoreObjects = appendNodes(targetCoreObjects, nodes)
-		fakeTargetCoreClient, fakePVLister, fakePVCLister, nodeLister, tracker := createFakeController(
+		fakeTargetCoreClient, fakePVLister, fakePVCLister, fakeNodeLister, tracker := createFakeController(
 			stop, testNamespace, targetCoreObjects,
 		)
 		defer tracker.Stop()
@@ -140,7 +140,8 @@ var _ = Describe("drain", func() {
 			nodeName:                     testNodeName,
 			pvLister:                     fakePVLister,
 			pvcLister:                    fakePVCLister,
-			nodeLister:                   nodeLister,
+			nodeLister:                   fakeNodeLister,
+			// TODO: Handle volumeAttachements via cache
 		}
 
 		// Get the pod directly from the ObjectTracker to avoid locking issues in the Fake object.

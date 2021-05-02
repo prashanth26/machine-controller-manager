@@ -36,14 +36,18 @@ import (
 	api "k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
+	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	policylisters "k8s.io/client-go/listers/policy/v1beta1"
+	storagelisters "k8s.io/client-go/listers/storage/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
 )
 
@@ -66,6 +70,7 @@ type Options struct {
 	pvLister                     corelisters.PersistentVolumeLister
 	pdbLister                    policylisters.PodDisruptionBudgetLister
 	nodeLister                   corelisters.NodeLister
+	volumeAttachementLister      storagelisters.VolumeAttachmentLister
 	drainStartedOn               time.Time
 	drainEndedOn                 time.Time
 }
@@ -167,6 +172,7 @@ func NewDrainOptions(
 		pvLister:                     pvLister,
 		pdbLister:                    pdbLister,
 		nodeLister:                   nodeLister,
+		// TODO: Handle volume attachments via lister
 	}
 
 }
@@ -501,12 +507,13 @@ func (o *Options) doAccountingOfPvs(pods []*corev1.Pod) map[string]PodVolumeInfo
 		podPVs, _ := o.getPVList(pod)
 		pvMap[getPodHash(pod)] = podPVs
 	}
-	klog.V(4).Info("PV map: ", pvMap)
+	klog.V(3).Info("PV map: ", pvMap)
 
 	// Filter the list of shared PVs
 	filterSharedPVs(pvMap)
 
 	for podHash, persistantVolumeList := range pvMap {
+		persistantVolumeListDeepCopy := persistantVolumeList
 		volumeList, err := o.getVolIDsFromDriver(persistantVolumeList)
 		if err != nil {
 			// In case of error, log and skip this set of volumes
@@ -514,13 +521,15 @@ func (o *Options) doAccountingOfPvs(pods []*corev1.Pod) map[string]PodVolumeInfo
 			continue
 		}
 
+		klog.V(3).Infof("TEST: \nPVA:%v \nPVD:%v \nVOL:%v", persistantVolumeList, persistantVolumeListDeepCopy, volumeList)
+
 		podVolumeInfo := PodVolumeInfo{
-			persistantVolumeList: persistantVolumeList,
+			persistantVolumeList: persistantVolumeListDeepCopy,
 			volumeList:           volumeList,
 		}
 		podVolumeInfoMap[podHash] = podVolumeInfo
 	}
-	klog.V(4).Infof("PodVolumeInfoMap = %v", podVolumeInfoMap)
+	klog.V(3).Infof("PodVolumeInfoMap = %v", podVolumeInfoMap)
 
 	return podVolumeInfoMap
 }
@@ -715,10 +724,25 @@ func (o *Options) evictPodsWithPVInternal(
 			time.Since(podEvictionStartTime),
 		)
 
-		// Reattach to consider 3 cases
-		// 1. If CSI is enabled use determine reattach
-		// 2. If CSI isn't enabled, use node objects to determine reattach
-		// If all else fails, fallback to static timeout
+		err = o.waitForReattach(ctx, podVolumeInfo)
+		cancelFn()
+
+		if apierrors.IsNotFound(err) {
+			klog.V(3).Info("Node not found anymore")
+			returnCh <- nil
+			return append(retryPods, pods[i+1:]...), true
+		} else if err != nil {
+			klog.Errorf("Error when waiting for volume to detach from node. Err: %v", err)
+			returnCh <- err
+			continue
+		}
+		klog.V(3).Infof(
+			"Volume reattached for Pod %s/%s in Node %q and took %v (including pod eviction/deletion time).",
+			pod.Namespace,
+			pod.Name,
+			pod.Spec.NodeName,
+			time.Since(podEvictionStartTime),
+		)
 
 		returnCh <- nil
 	}
@@ -825,9 +849,83 @@ func (o *Options) waitForDetach(ctx context.Context, podVolumeInfo PodVolumeInfo
 		}
 	}
 
-	// TODO: Add reattch logic here
-
 	klog.V(4).Infof("Detached volumes:%s from node %q", podVolumeInfo.volumeList, nodeName)
+	return nil
+}
+
+func isDesiredReattachment(persistantVolumeName string, obj interface{}) bool {
+	volumeAttachment := obj.(*storagev1.VolumeAttachment)
+	if volumeAttachment == nil {
+		klog.Errorf("Couldn't convert to volumeAttachment from object %v", obj)
+		return false
+	}
+
+	if *volumeAttachment.Spec.Source.PersistentVolumeName == persistantVolumeName && volumeAttachment.Status.Attached {
+		klog.V(3).Info("ReattachmentSuccessful: %v", volumeAttachment)
+		return true
+	}
+
+	return false
+}
+
+// waitForReattachUsingVolumeAttachments waits for reattachment using volumeAttachments
+func (o *Options) waitForReattachUsingVolumeAttachments(ctx context.Context, persistantVolumeName string, reattached chan<- bool) {
+	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(o.client, time.Second*30)
+	volumeAttachmentsInformer := kubeInformerFactory.Storage().V1().VolumeAttachments().Informer()
+	stopper := make(chan struct{})
+	defer close(stopper)
+
+	volumeAttachmentsInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			klog.V(3).Info("volumeAttachments added: %v", obj)
+			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, obj); reattachmentSuccess {
+				reattached <- true
+				return
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			klog.V(3).Info("volumeAttachments changed: %v", newObj)
+			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, newObj); reattachmentSuccess {
+				reattached <- true
+				return
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			klog.V(3).Info("volumeAttachments deleted: %v", obj)
+		},
+	})
+}
+
+// waitForReattach to consider 3 cases
+// 1. If CSI is enabled use determine reattach
+// 2. If CSI isn't enabled, use node objects to determine reattach
+// 3. If all else fails, fallback to static timeout
+func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeInfo) error {
+	if len(podVolumeInfo.persistantVolumeList) == 0 {
+		// If volume or node name is not available, nothing to do. Just log this as warning
+		klog.Warningf("List of pod PVs waiting for reattachment is 0: %v", podVolumeInfo.persistantVolumeList)
+		return nil
+	}
+
+	klog.V(3).Infof("Waiting for following volumes to reattach: %v", podVolumeInfo.persistantVolumeList)
+
+	for _, persistantVolumeName := range podVolumeInfo.persistantVolumeList {
+		reattached := make(chan bool, 1)
+
+		klog.V(3).Infof("Waiting for following volume %q to reattach", persistantVolumeName)
+
+		go o.waitForReattachUsingVolumeAttachments(ctx, persistantVolumeName, reattached)
+
+		select {
+		case <-ctx.Done():
+			klog.Warningf("Timeout occurred while waiting for PV %q to reattach to a different node", persistantVolumeName)
+			return fmt.Errorf("Timeout occurred while waiting for PVs %q to reattach to a different node", persistantVolumeName)
+		case <-reattached:
+			continue
+		}
+	}
+
+	klog.V(3).Infof("Successfully reattached volumes: %s", podVolumeInfo.volumeList)
 	return nil
 }
 

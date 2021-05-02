@@ -36,10 +36,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	policyinformers "k8s.io/client-go/informers/policy/v1beta1"
+	storageinformers "k8s.io/client-go/informers/storage/v1"
 	"k8s.io/client-go/kubernetes"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	policylisters "k8s.io/client-go/listers/policy/v1beta1"
+	storagelisters "k8s.io/client-go/listers/storage/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -75,6 +77,7 @@ func NewController(
 	secretInformer coreinformers.SecretInformer,
 	nodeInformer coreinformers.NodeInformer,
 	pdbInformer policyinformers.PodDisruptionBudgetInformer,
+	volumeAttachmentInformer storageinformers.VolumeAttachmentInformer,
 	machineClassInformer machineinformers.MachineClassInformer,
 	machineInformer machineinformers.MachineInformer,
 	recorder record.EventRecorder,
@@ -119,6 +122,8 @@ func NewController(
 	controller.pvLister = pvInformer.Lister()
 	controller.secretLister = secretInformer.Lister()
 	controller.pdbLister = pdbInformer.Lister()
+	// TODO: Need to handle K8s versions below 1.13 differently
+	controller.volumeAttachementLister = volumeAttachmentInformer.Lister()
 	controller.machineClassLister = machineClassInformer.Lister()
 	controller.nodeLister = nodeInformer.Lister()
 	controller.machineLister = machineInformer.Lister()
@@ -128,6 +133,7 @@ func NewController(
 	controller.pvSynced = pvInformer.Informer().HasSynced
 	controller.secretSynced = secretInformer.Informer().HasSynced
 	controller.pdbSynced = pdbInformer.Informer().HasSynced
+	controller.volumeAttachementSynced = volumeAttachmentInformer.Informer().HasSynced
 	controller.machineClassSynced = machineClassInformer.Informer().HasSynced
 	controller.nodeSynced = nodeInformer.Informer().HasSynced
 	controller.machineSynced = machineInformer.Informer().HasSynced
@@ -210,13 +216,14 @@ type controller struct {
 	driver                 driver.Driver
 
 	// listers
-	pvcLister          corelisters.PersistentVolumeClaimLister
-	pvLister           corelisters.PersistentVolumeLister
-	secretLister       corelisters.SecretLister
-	nodeLister         corelisters.NodeLister
-	pdbLister          policylisters.PodDisruptionBudgetLister
-	machineClassLister machinelisters.MachineClassLister
-	machineLister      machinelisters.MachineLister
+	pvcLister               corelisters.PersistentVolumeClaimLister
+	pvLister                corelisters.PersistentVolumeLister
+	secretLister            corelisters.SecretLister
+	nodeLister              corelisters.NodeLister
+	pdbLister               policylisters.PodDisruptionBudgetLister
+	volumeAttachementLister storagelisters.VolumeAttachmentLister
+	machineClassLister      machinelisters.MachineClassLister
+	machineLister           machinelisters.MachineLister
 	// queues
 	secretQueue                 workqueue.RateLimitingInterface
 	nodeQueue                   workqueue.RateLimitingInterface
@@ -225,13 +232,14 @@ type controller struct {
 	machineSafetyOrphanVMsQueue workqueue.RateLimitingInterface
 	machineSafetyAPIServerQueue workqueue.RateLimitingInterface
 	// syncs
-	pvcSynced          cache.InformerSynced
-	pvSynced           cache.InformerSynced
-	secretSynced       cache.InformerSynced
-	pdbSynced          cache.InformerSynced
-	nodeSynced         cache.InformerSynced
-	machineClassSynced cache.InformerSynced
-	machineSynced      cache.InformerSynced
+	pvcSynced               cache.InformerSynced
+	pvSynced                cache.InformerSynced
+	secretSynced            cache.InformerSynced
+	pdbSynced               cache.InformerSynced
+	volumeAttachementSynced cache.InformerSynced
+	nodeSynced              cache.InformerSynced
+	machineClassSynced      cache.InformerSynced
+	machineSynced           cache.InformerSynced
 }
 
 func (c *controller) Run(workers int, stopCh <-chan struct{}) {
@@ -248,7 +256,7 @@ func (c *controller) Run(workers int, stopCh <-chan struct{}) {
 	defer c.machineSafetyOrphanVMsQueue.ShutDown()
 	defer c.machineSafetyAPIServerQueue.ShutDown()
 
-	if !cache.WaitForCacheSync(stopCh, c.secretSynced, c.pvcSynced, c.pvSynced, c.pdbSynced, c.nodeSynced, c.machineClassSynced, c.machineSynced) {
+	if !cache.WaitForCacheSync(stopCh, c.secretSynced, c.pvcSynced, c.pvSynced, c.pdbSynced, c.volumeAttachementSynced, c.nodeSynced, c.machineClassSynced, c.machineSynced) {
 		runtimeutil.HandleError(fmt.Errorf("Timed out waiting for caches to sync"))
 		return
 	}
