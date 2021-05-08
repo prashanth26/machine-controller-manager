@@ -46,7 +46,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	policylisters "k8s.io/client-go/listers/policy/v1beta1"
-	storagelisters "k8s.io/client-go/listers/storage/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
 )
@@ -54,25 +53,25 @@ import (
 // Options are configurable options while draining a node before deletion
 type Options struct {
 	client                       kubernetes.Interface
+	DeleteLocalData              bool
+	Driver                       driver.Driver
+	drainStartedOn               time.Time
+	drainEndedOn                 time.Time
+	ErrOut                       io.Writer
 	ForceDeletePods              bool
-	IgnorePodsWithoutControllers bool
 	GracePeriodSeconds           int
+	IgnorePodsWithoutControllers bool
 	IgnoreDaemonsets             bool
-	Timeout                      time.Duration
 	MaxEvictRetries              int32
 	PvDetachTimeout              time.Duration
-	DeleteLocalData              bool
 	nodeName                     string
 	Out                          io.Writer
-	ErrOut                       io.Writer
-	Driver                       driver.Driver
 	pvcLister                    corelisters.PersistentVolumeClaimLister
 	pvLister                     corelisters.PersistentVolumeLister
 	pdbLister                    policylisters.PodDisruptionBudgetLister
 	nodeLister                   corelisters.NodeLister
-	volumeAttachementLister      storagelisters.VolumeAttachmentLister
-	drainStartedOn               time.Time
-	drainEndedOn                 time.Time
+	volumeAttachmentSupported    bool
+	Timeout                      time.Duration
 }
 
 // Takes a pod and returns a bool indicating whether or not to operate on the
@@ -100,6 +99,13 @@ const (
 	// EvictionSubresource is the kind used for evicting pods
 	EvictionSubresource = "pods/eviction"
 
+	// VolumeAttachmentGroupName group name
+	VolumeAttachmentGroupName = "storage.k8s.io"
+	// VolumenAttachmentKind is the kind used for VolumeAttachment
+	VolumeAttachmentResourceName = "volumeattachments"
+	// VolumeAttachmentResource is the kind used for evicting pods
+	VolumeAttachmentResourceKind = "VolumeAttachment"
+
 	// DefaultMachineDrainTimeout is the default value for MachineDrainTimeout
 	DefaultMachineDrainTimeout = 2 * time.Hour
 
@@ -126,6 +132,7 @@ const (
 	localStorageWarning = "Deleting pods with local storage"
 	unmanagedFatal      = "pods not managed by ReplicationController, ReplicaSet, Job, DaemonSet or StatefulSet (use --force to override)"
 	unmanagedWarning    = "Deleting pods not managed by ReplicationController, ReplicaSet, Job, DaemonSet or StatefulSet"
+	reattachTimeoutErr  = "Timeout occurred while waiting for PV to reattach to a different node"
 )
 
 var (
@@ -153,6 +160,7 @@ func NewDrainOptions(
 	pdbLister policylisters.PodDisruptionBudgetLister,
 	nodeLister corelisters.NodeLister,
 ) *Options {
+	volumeAttachmentSupported := IsResourceSupported(client, VolumeAttachmentGroupName, VolumeAttachmentResourceName, VolumeAttachmentResourceKind)
 
 	return &Options{
 		client:                       client,
@@ -172,9 +180,8 @@ func NewDrainOptions(
 		pvLister:                     pvLister,
 		pdbLister:                    pdbLister,
 		nodeLister:                   nodeLister,
-		// TODO: Handle volume attachments via lister
+		volumeAttachmentSupported:    volumeAttachmentSupported,
 	}
-
 }
 
 // RunDrain runs the 'drain' command
@@ -507,7 +514,6 @@ func (o *Options) doAccountingOfPvs(pods []*corev1.Pod) map[string]PodVolumeInfo
 		podPVs, _ := o.getPVList(pod)
 		pvMap[getPodHash(pod)] = podPVs
 	}
-	klog.V(3).Info("PV map: ", pvMap)
 
 	// Filter the list of shared PVs
 	filterSharedPVs(pvMap)
@@ -521,15 +527,13 @@ func (o *Options) doAccountingOfPvs(pods []*corev1.Pod) map[string]PodVolumeInfo
 			continue
 		}
 
-		klog.V(3).Infof("TEST: \nPVA:%v \nPVD:%v \nVOL:%v", persistantVolumeList, persistantVolumeListDeepCopy, volumeList)
-
 		podVolumeInfo := PodVolumeInfo{
 			persistantVolumeList: persistantVolumeListDeepCopy,
 			volumeList:           volumeList,
 		}
 		podVolumeInfoMap[podHash] = podVolumeInfo
 	}
-	klog.V(3).Infof("PodVolumeInfoMap = %v", podVolumeInfoMap)
+	klog.V(4).Infof("PodVolumeInfoMap = %v", podVolumeInfoMap)
 
 	return podVolumeInfoMap
 }
@@ -716,8 +720,8 @@ func (o *Options) evictPodsWithPVInternal(
 			returnCh <- err
 			continue
 		}
-		klog.V(3).Infof(
-			"Volume detached for Pod %s/%s in Node %q and took %v (including pod eviction/deletion time).",
+		klog.V(4).Infof(
+			"Pod + volume detachment for Pod %s/%s in Node %q and took %v",
 			pod.Namespace,
 			pod.Name,
 			pod.Spec.NodeName,
@@ -728,17 +732,18 @@ func (o *Options) evictPodsWithPVInternal(
 		err = o.waitForReattach(ctx, podVolumeInfo, o.nodeName)
 		cancelFn()
 
-		if apierrors.IsNotFound(err) {
-			klog.V(3).Info("Node not found anymore")
-			returnCh <- nil
-			return append(retryPods, pods[i+1:]...), true
-		} else if err != nil {
-			klog.Errorf("Error when waiting for volume to detach from node. Err: %v", err)
-			returnCh <- err
-			continue
+		if err != nil {
+			if err.Error() == reattachTimeoutErr {
+				klog.Warningf("Timeout occurred for following volumes to reattach: %v", podVolumeInfo.persistantVolumeList)
+			} else {
+				klog.Errorf("Error when waiting for volume reattachment. Err: %v", err)
+				returnCh <- err
+				continue
+			}
 		}
+
 		klog.V(3).Infof(
-			"Volume reattachment for Pod %s/%s and took %v (including pod eviction/deletion time).",
+			"Pod + volume detachment + volume reattachment for Pod %s/%s took %v",
 			pod.Namespace,
 			pod.Name,
 			time.Since(podEvictionStartTime),
@@ -861,7 +866,7 @@ func isDesiredReattachment(persistantVolumeName string, previousNodeName string,
 	}
 
 	if *volumeAttachment.Spec.Source.PersistentVolumeName == persistantVolumeName && volumeAttachment.Status.Attached && volumeAttachment.Spec.NodeName != previousNodeName {
-		klog.V(3).Info("ReattachmentSuccessful: %v", volumeAttachment)
+		klog.V(3).Infof("ReattachmentSuccessful for persistant volume %q", persistantVolumeName)
 		return true
 	}
 
@@ -872,30 +877,30 @@ func isDesiredReattachment(persistantVolumeName string, previousNodeName string,
 func (o *Options) waitForReattachUsingVolumeAttachments(ctx context.Context, persistantVolumeName string, previousNodeName string, reattached chan<- bool) {
 	var (
 		stopper                   = make(chan struct{})
-		kubeInformerFactory       = kubeinformers.NewSharedInformerFactory(o.client, time.Second*30)
+		kubeInformerFactory       = kubeinformers.NewSharedInformerFactory(o.client, time.Hour)
 		volumeAttachmentsInformer = kubeInformerFactory.Storage().V1().VolumeAttachments().Informer()
 	)
-	defer close(stopper)
 
 	volumeAttachmentsInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			klog.V(4).Info("volumeAttachments added: %v", obj)
+			klog.V(4).Infof("volumeAttachments added: %v", obj)
 			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, obj); reattachmentSuccess {
 				reattached <- true
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			klog.V(4).Info("volumeAttachments changed: %v", newObj)
+			klog.V(4).Infof("volumeAttachments changed: %v", newObj)
 			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, newObj); reattachmentSuccess {
 				reattached <- true
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
-			klog.V(4).Info("volumeAttachments deleted: %v", obj)
+			klog.V(4).Infof("volumeAttachments deleted: %v", obj)
 		},
 	})
 
 	kubeInformerFactory.Start(stopper)
+	defer close(stopper)
 
 	select {
 	case <-ctx.Done():
@@ -904,10 +909,9 @@ func (o *Options) waitForReattachUsingVolumeAttachments(ctx context.Context, per
 	}
 }
 
-// waitForReattach to consider 3 cases
+// waitForReattach to consider 2 cases
 // 1. If CSI is enabled use determine reattach
-// 2. If CSI isn't enabled, use node objects to determine reattach
-// 3. If all else fails, fallback to static timeout
+// 2. If all else fails, fallback to static timeout
 func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeInfo, previousNodeName string) error {
 	if len(podVolumeInfo.persistantVolumeList) == 0 {
 		// If volume or node name is not available, nothing to do. Just log this as warning
@@ -915,25 +919,29 @@ func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeIn
 		return nil
 	}
 
-	klog.V(3).Infof("Waiting for following volumes to reattach: %v", podVolumeInfo.persistantVolumeList)
+	klog.V(4).Infof("Waiting for following volumes to reattach: %v", podVolumeInfo.persistantVolumeList)
 
 	for _, persistantVolumeName := range podVolumeInfo.persistantVolumeList {
 		reattached := make(chan bool, 1)
 
 		klog.V(3).Infof("Waiting for following volume %q to reattach", persistantVolumeName)
 
-		go o.waitForReattachUsingVolumeAttachments(ctx, persistantVolumeName, previousNodeName, reattached)
+		if o.volumeAttachmentSupported {
+			// If VolumeAttachmentsIsSupported, wait for reattachments
+			// Else, it will fall back to default PV detach/reattach timeout
+			go o.waitForReattachUsingVolumeAttachments(ctx, persistantVolumeName, previousNodeName, reattached)
+		}
 
 		select {
 		case <-ctx.Done():
 			klog.Warningf("Timeout occurred while waiting for PV %q to reattach to a different node", persistantVolumeName)
-			return fmt.Errorf("Timeout occurred while waiting for PVs %q to reattach to a different node", persistantVolumeName)
+			return fmt.Errorf(reattachTimeoutErr)
 		case <-reattached:
 			continue
 		}
 	}
 
-	klog.V(3).Infof("Successfully reattached volumes: %s", podVolumeInfo.persistantVolumeList)
+	klog.V(4).Infof("Successfully reattached volumes: %s", podVolumeInfo.persistantVolumeList)
 	return nil
 }
 
@@ -1101,6 +1109,51 @@ func SupportEviction(clientset kubernetes.Interface) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// IsResourceSupported uses Discovery API to find out if the server supports
+// the give resource of groupName, resourceName & resourceKind
+// If support, it will return its groupVersion; Otherwise, it will return ""
+func IsResourceSupported(
+	clientset kubernetes.Interface,
+	GroupName string,
+	ResourceName string,
+	ResourceKind string,
+) bool {
+	var (
+		foundDesiredGroup   bool
+		desiredGroupVersion string
+	)
+
+	discoveryClient := clientset.Discovery()
+	groupList, err := discoveryClient.ServerGroups()
+	if err != nil {
+		return false
+	}
+
+	for _, group := range groupList.Groups {
+		if group.Name == GroupName {
+			foundDesiredGroup = true
+			desiredGroupVersion = group.PreferredVersion.GroupVersion
+			break
+		}
+	}
+	if !foundDesiredGroup {
+		return false
+	}
+
+	resourceList, err := discoveryClient.ServerResourcesForGroupVersion(desiredGroupVersion)
+	if err != nil {
+		return false
+	}
+
+	for _, resource := range resourceList.APIResources {
+		if resource.Name == ResourceName && resource.Kind == ResourceKind {
+			klog.V(4).Infof("Found Resource Name: %q, Resource Kind: %q", resource.Name, resource.Kind)
+			return true
+		}
+	}
+	return false
 }
 
 // RunCordonOrUncordon runs either Cordon or Uncordon.  The desired value for
