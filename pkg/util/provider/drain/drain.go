@@ -868,6 +868,7 @@ func isDesiredReattachment(persistantVolumeName string, previousNodeName string,
 		return false
 	}
 
+	// klog.Errorf("Volume: %s, NODE: %s", *volumeAttachment.Spec.Source.PersistentVolumeName, volumeAttachment.Spec.NodeName)
 	if *volumeAttachment.Spec.Source.PersistentVolumeName == persistantVolumeName && volumeAttachment.Status.Attached && volumeAttachment.Spec.NodeName != previousNodeName {
 		klog.V(3).Infof("ReattachmentSuccessful for persistant volume %q", persistantVolumeName)
 		return true
@@ -887,12 +888,14 @@ func (o *Options) waitForReattachUsingVolumeAttachments(ctx context.Context, per
 	volumeAttachmentsInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			klog.V(4).Infof("volumeAttachments added: %v", obj)
+			// klog.Error("Created")
 			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, obj); reattachmentSuccess {
 				reattached <- true
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			klog.V(4).Infof("volumeAttachments changed: %v", newObj)
+			// klog.Error("Updated")
 			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, newObj); reattachmentSuccess {
 				reattached <- true
 			}
@@ -1163,6 +1166,7 @@ func IsResourceSupported(
 // "Unschedulable" is passed as the first arg.
 func (o *Options) RunCordonOrUncordon(desired bool) error {
 	// TODO: Change this to lister call
+	// node, err := o.nodeLister.Get(o.nodeName)
 	node, err := o.client.CoreV1().Nodes().Get(o.nodeName, metav1.GetOptions{})
 	if err != nil {
 		// Deletion could be triggered when machine is just being created, no node present then
