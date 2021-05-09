@@ -13,7 +13,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-*/ // Package drain is used to drain nodes
+*/
+
+// Package drain is used to drain nodes
 package drain
 
 import (
@@ -39,14 +41,16 @@ import (
 )
 
 var _ = Describe("drain", func() {
-	const testNodeName = "node"
-	const terminationGracePeriodShort = 5 * time.Second
-	const terminationGracePeriodShortBy4 = terminationGracePeriodShort / 4
-	const terminationGracePeriodShortBy8 = terminationGracePeriodShort / 8
-	const terminationGracePeriodMedium = 10 * time.Second
-	const terminationGracePeriodDefault = 20 * time.Second
-	const terminationGracePeriodLong = 2 * time.Minute
-	const testNamespace = "test"
+	const (
+		testNodeName                   = "node"
+		terminationGracePeriodShort    = 5 * time.Second
+		terminationGracePeriodShortBy4 = terminationGracePeriodShort / 4
+		terminationGracePeriodShortBy8 = terminationGracePeriodShort / 8
+		terminationGracePeriodMedium   = 10 * time.Second
+		terminationGracePeriodDefault  = 20 * time.Second
+		terminationGracePeriodLong     = 2 * time.Minute
+		testNamespace                  = "test"
+	)
 
 	type stats struct {
 		nPodsWithoutPV                int
@@ -119,29 +123,33 @@ var _ = Describe("drain", func() {
 		// Expect(cache.WaitForCacheSync(stop, fakePVCLister)).To(BeTrue())
 		time.Sleep(time.Millisecond)
 
-		//fakeDriver := driver.NewFakeDriver(driver.FakeDriver{Err: nil,})
 		maxEvictRetries := setup.maxEvictRetries
 		if maxEvictRetries <= 0 {
 			maxEvictRetries = 3
 		}
+
 		d := &Options{
+			client:                       fakeTargetCoreClient,
 			DeleteLocalData:              true,
 			Driver:                       &drainDriver{},
+			drainStartedOn:               time.Time{},
+			drainEndedOn:                 time.Time{},
 			ErrOut:                       GinkgoWriter,
 			ForceDeletePods:              setup.force,
-			IgnorePodsWithoutControllers: true,
 			GracePeriodSeconds:           30,
+			IgnorePodsWithoutControllers: true,
 			IgnoreDaemonsets:             true,
 			MaxEvictRetries:              maxEvictRetries,
-			Out:                          GinkgoWriter,
-			PvDetachTimeout:              3 * time.Minute,
-			Timeout:                      time.Minute,
-			client:                       fakeTargetCoreClient,
+			PvDetachTimeout:              20 * time.Second,
+			PvReattachTimeout:            2 * time.Second,
 			nodeName:                     testNodeName,
-			pvLister:                     fakePVLister,
+			Out:                          GinkgoWriter,
 			pvcLister:                    fakePVCLister,
+			pvLister:                     fakePVLister,
+			pdbLister:                    nil,
 			nodeLister:                   fakeNodeLister,
-			// TODO: Handle volumeAttachements via cache
+			volumeAttachmentSupported:    true,
+			Timeout:                      2 * time.Minute,
 		}
 
 		// Get the pod directly from the ObjectTracker to avoid locking issues in the Fake object.

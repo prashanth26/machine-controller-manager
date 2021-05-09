@@ -64,6 +64,7 @@ type Options struct {
 	IgnoreDaemonsets             bool
 	MaxEvictRetries              int32
 	PvDetachTimeout              time.Duration
+	PvReattachTimeout            time.Duration
 	nodeName                     string
 	Out                          io.Writer
 	pvcLister                    corelisters.PersistentVolumeClaimLister
@@ -146,6 +147,7 @@ func NewDrainOptions(
 	timeout time.Duration,
 	maxEvictRetries int32,
 	pvDetachTimeout time.Duration,
+	pvReattachTimeout time.Duration,
 	nodeName string,
 	gracePeriodSeconds int,
 	forceDeletePods bool,
@@ -171,6 +173,7 @@ func NewDrainOptions(
 		MaxEvictRetries:              maxEvictRetries,
 		Timeout:                      timeout,
 		PvDetachTimeout:              pvDetachTimeout,
+		PvReattachTimeout:            pvReattachTimeout,
 		DeleteLocalData:              deleteLocalData,
 		nodeName:                     nodeName,
 		Out:                          out,
@@ -728,7 +731,7 @@ func (o *Options) evictPodsWithPVInternal(
 			time.Since(podEvictionStartTime),
 		)
 
-		ctx, cancelFn = context.WithTimeout(mainContext, o.PvDetachTimeout)
+		ctx, cancelFn = context.WithTimeout(mainContext, o.PvReattachTimeout)
 		err = o.waitForReattach(ctx, podVolumeInfo, o.nodeName)
 		cancelFn()
 
