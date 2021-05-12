@@ -816,9 +816,9 @@ func (o *Options) waitForDetach(ctx context.Context, podVolumeInfo PodVolumeInfo
 		found = false
 
 		node, err := o.client.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
-		// klog.Error(node.Status)
-		// node, err := o.nodeLister.Get(nodeName)
-		// klog.Error(node.Status)
+		klog.Error(node.Status)
+		node, err = o.nodeLister.Get(nodeName)
+		klog.Error(node.Status)
 
 		if apierrors.IsNotFound(err) {
 			klog.V(4).Info("Node not found: ", nodeName)
@@ -868,7 +868,7 @@ func isDesiredReattachment(persistantVolumeName string, previousNodeName string,
 		return false
 	}
 
-	// klog.Errorf("Volume: %s, NODE: %s", *volumeAttachment.Spec.Source.PersistentVolumeName, volumeAttachment.Spec.NodeName)
+	klog.Errorf("Volume: %s, NODE: %s", *volumeAttachment.Spec.Source.PersistentVolumeName, volumeAttachment.Spec.NodeName)
 	if *volumeAttachment.Spec.Source.PersistentVolumeName == persistantVolumeName && volumeAttachment.Status.Attached && volumeAttachment.Spec.NodeName != previousNodeName {
 		klog.V(3).Infof("ReattachmentSuccessful for persistant volume %q", persistantVolumeName)
 		return true
@@ -888,14 +888,14 @@ func (o *Options) waitForReattachUsingVolumeAttachments(ctx context.Context, per
 	volumeAttachmentsInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			klog.V(4).Infof("volumeAttachments added: %v", obj)
-			// klog.Error("Created")
+			klog.Error("Created")
 			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, obj); reattachmentSuccess {
 				reattached <- true
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			klog.V(4).Infof("volumeAttachments changed: %v", newObj)
-			// klog.Error("Updated")
+			klog.Error("Updated")
 			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, newObj); reattachmentSuccess {
 				reattached <- true
 			}

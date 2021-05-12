@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/klog"
 )
 
 var _ = Describe("drain", func() {
@@ -489,7 +490,7 @@ var _ = Describe("drain", func() {
 				// Because waitForDetach polling Interval is equal to terminationGracePeriodShort
 				minDrainDuration: terminationGracePeriodMedium,
 			}),
-		Entry("Successful drain with support for eviction of pods with exclusive volumes",
+		FEntry("Successful drain with support for eviction of pods with exclusive volumes",
 			&setup{
 				stats: stats{
 					nPodsWithoutPV:                0,
@@ -516,7 +517,7 @@ var _ = Describe("drain", func() {
 				// Because waitForDetach polling Interval is equal to terminationGracePeriodShort
 				minDrainDuration: terminationGracePeriodMedium,
 			}),
-		Entry("Successful drain with support for eviction of pods with exclusive volumes with volume attachments",
+		FEntry("Successful drain with support for eviction of pods with exclusive volumes with volume attachments",
 			&setup{
 				stats: stats{
 					nPodsWithoutPV:                0,
@@ -1061,7 +1062,9 @@ func updateVolumeAttachments(drainOptions *Options, pvName string, nodeName stri
 	defer GinkgoRecover()
 
 	// TODO: re-introduce this delay to properly mock delay
-	// time.Sleep(time.Second * 5)
+	klog.Error("updateVolumeAttachments delayed")
+	time.Sleep(time.Second * 5)
+	klog.Error("updateVolumeAttachments started")
 
 	// Delete existing volume attachment
 	volumeAttachments, err := drainOptions.client.StorageV1().VolumeAttachments().List(metav1.ListOptions{})
@@ -1101,5 +1104,5 @@ func updateVolumeAttachments(drainOptions *Options, pvName string, nodeName stri
 
 	newVolumeAttachment, err = drainOptions.client.StorageV1().VolumeAttachments().UpdateStatus(newVolumeAttachment)
 	Expect(err).To(BeNil())
-	// klog.Error("Updated VAs")
+	klog.Error("updateVolumeAttachments ended")
 }
