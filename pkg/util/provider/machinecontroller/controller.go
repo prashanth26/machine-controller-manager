@@ -28,6 +28,7 @@ import (
 	machineinformers "github.com/gardener/machine-controller-manager/pkg/client/informers/externalversions/machine/v1alpha1"
 	machinelisters "github.com/gardener/machine-controller-manager/pkg/client/listers/machine/v1alpha1"
 	"github.com/gardener/machine-controller-manager/pkg/handlers"
+	"github.com/gardener/machine-controller-manager/pkg/util/provider/drain"
 	"github.com/gardener/machine-controller-manager/pkg/util/provider/driver"
 	"github.com/gardener/machine-controller-manager/pkg/util/provider/options"
 	"github.com/prometheus/client_golang/prometheus"
@@ -101,6 +102,7 @@ func NewController(
 		nodeConditions:                nodeConditions,
 		driver:                        driver,
 		bootstrapTokenAuthExtraGroups: bootstrapTokenAuthExtraGroups,
+		volumeAttachmentHandler:       drain.NewVolumeAttachmentHandler(),
 	}
 
 	controller.internalExternalScheme = runtime.NewScheme()
@@ -177,16 +179,20 @@ func NewController(
 	})
 
 	// MachineSafety Controller Informers
-
 	// We follow the kubernetes way of reconciling the safety controller
 	// done by adding empty key objects. We initialize it, to trigger
 	// running of different safety loop on MCM startup.
 	controller.machineSafetyOrphanVMsQueue.Add("")
 	controller.machineSafetyAPIServerQueue.Add("")
-
 	machineInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		// deleteMachineToSafety makes sure that orphan VM handler is invoked
 		DeleteFunc: controller.deleteMachineToSafety,
+	})
+
+	// Drain Controller Informers
+	volumeAttachmentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.volumeAttachmentHandler.AddVolumeAttachment,
+		UpdateFunc: controller.volumeAttachmentHandler.UpdateVolumeAttachment,
 	})
 
 	return controller, nil
@@ -210,10 +216,11 @@ type controller struct {
 	controlCoreClient    kubernetes.Interface
 	targetCoreClient     kubernetes.Interface
 
-	recorder               record.EventRecorder
-	safetyOptions          options.SafetyOptions
-	internalExternalScheme *runtime.Scheme
-	driver                 driver.Driver
+	recorder                record.EventRecorder
+	safetyOptions           options.SafetyOptions
+	internalExternalScheme  *runtime.Scheme
+	driver                  driver.Driver
+	volumeAttachmentHandler *drain.VolumeAttachmentHandler
 
 	// listers
 	pvcLister               corelisters.PersistentVolumeClaimLister

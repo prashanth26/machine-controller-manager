@@ -62,7 +62,8 @@ var _ = Describe("drain", func() {
 	}
 	type setup struct {
 		stats
-		attemptEviction           bool
+		attemptEviction bool
+		// TODO: Removed this
 		volumeAttachmentSupported bool
 		maxEvictRetries           int32
 		terminationGracePeriod    time.Duration
@@ -167,7 +168,6 @@ var _ = Describe("drain", func() {
 			pvLister:                     fakePVLister,
 			pdbLister:                    nil,
 			nodeLister:                   fakeNodeLister,
-			volumeAttachmentSupported:    setup.volumeAttachmentSupported,
 			Timeout:                      2 * time.Minute,
 		}
 

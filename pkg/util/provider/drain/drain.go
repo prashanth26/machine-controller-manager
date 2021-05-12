@@ -71,7 +71,6 @@ type Options struct {
 	pvLister                     corelisters.PersistentVolumeLister
 	pdbLister                    policylisters.PodDisruptionBudgetLister
 	nodeLister                   corelisters.NodeLister
-	volumeAttachmentSupported    bool
 	Timeout                      time.Duration
 }
 
@@ -99,13 +98,6 @@ const (
 	EvictionKind = "Eviction"
 	// EvictionSubresource is the kind used for evicting pods
 	EvictionSubresource = "pods/eviction"
-
-	// VolumeAttachmentGroupName group name
-	VolumeAttachmentGroupName = "storage.k8s.io"
-	// VolumenAttachmentKind is the kind used for VolumeAttachment
-	VolumeAttachmentResourceName = "volumeattachments"
-	// VolumeAttachmentResource is the kind used for evicting pods
-	VolumeAttachmentResourceKind = "VolumeAttachment"
 
 	// DefaultMachineDrainTimeout is the default value for MachineDrainTimeout
 	DefaultMachineDrainTimeout = 2 * time.Hour
@@ -162,8 +154,6 @@ func NewDrainOptions(
 	pdbLister policylisters.PodDisruptionBudgetLister,
 	nodeLister corelisters.NodeLister,
 ) *Options {
-	volumeAttachmentSupported := IsResourceSupported(client, VolumeAttachmentGroupName, VolumeAttachmentResourceName, VolumeAttachmentResourceKind)
-
 	return &Options{
 		client:                       client,
 		ForceDeletePods:              forceDeletePods,
@@ -183,7 +173,6 @@ func NewDrainOptions(
 		pvLister:                     pvLister,
 		pdbLister:                    pdbLister,
 		nodeLister:                   nodeLister,
-		volumeAttachmentSupported:    volumeAttachmentSupported,
 	}
 }
 
@@ -932,7 +921,9 @@ func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeIn
 
 		klog.V(3).Infof("Waiting for following volume %q to reattach", persistantVolumeName)
 
-		if o.volumeAttachmentSupported {
+		// TODO: add volume support check here
+		//if o.volumeAttachmentSupported {
+		{
 			// If VolumeAttachmentsIsSupported, wait for reattachments
 			// Else, it will fall back to default PV detach/reattach timeout
 			go o.waitForReattachUsingVolumeAttachments(ctx, persistantVolumeName, previousNodeName, reattached)
@@ -1115,51 +1106,6 @@ func SupportEviction(clientset kubernetes.Interface) (string, error) {
 		}
 	}
 	return "", nil
-}
-
-// IsResourceSupported uses Discovery API to find out if the server supports
-// the give resource of groupName, resourceName & resourceKind
-// If support, it will return its groupVersion; Otherwise, it will return ""
-func IsResourceSupported(
-	clientset kubernetes.Interface,
-	GroupName string,
-	ResourceName string,
-	ResourceKind string,
-) bool {
-	var (
-		foundDesiredGroup   bool
-		desiredGroupVersion string
-	)
-
-	discoveryClient := clientset.Discovery()
-	groupList, err := discoveryClient.ServerGroups()
-	if err != nil {
-		return false
-	}
-
-	for _, group := range groupList.Groups {
-		if group.Name == GroupName {
-			foundDesiredGroup = true
-			desiredGroupVersion = group.PreferredVersion.GroupVersion
-			break
-		}
-	}
-	if !foundDesiredGroup {
-		return false
-	}
-
-	resourceList, err := discoveryClient.ServerResourcesForGroupVersion(desiredGroupVersion)
-	if err != nil {
-		return false
-	}
-
-	for _, resource := range resourceList.APIResources {
-		if resource.Name == ResourceName && resource.Kind == ResourceKind {
-			klog.V(4).Infof("Found Resource Name: %q, Resource Kind: %q", resource.Name, resource.Kind)
-			return true
-		}
-	}
-	return false
 }
 
 // RunCordonOrUncordon runs either Cordon or Uncordon.  The desired value for
