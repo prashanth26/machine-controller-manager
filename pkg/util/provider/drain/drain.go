@@ -815,6 +815,7 @@ func (o *Options) waitForDetach(ctx context.Context, podVolumeInfo PodVolumeInfo
 
 		found = false
 
+		// ToDO check this
 		node, err := o.client.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
 		klog.Error(node.Status)
 		node, err = o.nodeLister.Get(nodeName)

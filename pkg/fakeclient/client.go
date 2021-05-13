@@ -39,6 +39,7 @@ import (
 	policyv1beta1 "k8s.io/client-go/kubernetes/typed/policy/v1beta1"
 	fakepolicyv1beta1 "k8s.io/client-go/kubernetes/typed/policy/v1beta1/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/klog"
 )
 
 // FakeObjectTracker implements both k8stesting.ObjectTracker as well as watch.Interface.
@@ -142,6 +143,7 @@ func (t *FakeObjectTracker) Update(gvr schema.GroupVersionResource, obj runtime.
 		return errors.New("Error sending event on a stopped tracker")
 	}
 
+	klog.Error("Entering fake watcher")
 	t.FakeWatcher.Modify(obj)
 	return nil
 }
@@ -242,6 +244,7 @@ func (t *FakeObjectTracker) Start() error {
 
 func (t *FakeObjectTracker) dispatch(event *watch.Event) {
 	for _, w := range t.watchers {
+		// Heart of watchers
 		go w.dispatch(event)
 	}
 }
@@ -319,6 +322,7 @@ func (w *watcher) dispatch(event *watch.Event) {
 	w.updateMutex.Lock()
 	defer w.updateMutex.Unlock()
 
+	// Individual watches
 	if !w.handles(event) {
 		return
 	}

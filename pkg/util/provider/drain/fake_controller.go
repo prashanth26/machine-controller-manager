@@ -21,6 +21,8 @@ package drain
 import (
 	"time"
 
+	//. "github.com/onsi/gomega"
+
 	customfake "github.com/gardener/machine-controller-manager/pkg/fakeclient"
 	"k8s.io/apimachinery/pkg/runtime"
 	coreinformers "k8s.io/client-go/informers"
@@ -37,6 +39,7 @@ func createFakeController(
 	corelisters.PersistentVolumeLister,
 	corelisters.PersistentVolumeClaimLister,
 	corelisters.NodeLister,
+	func() bool,
 	*customfake.FakeObjectTracker) {
 
 	fakeTargetCoreClient, targetCoreObjectTracker := customfake.NewCoreClientSet(targetCoreObjects...)
@@ -58,5 +61,7 @@ func createFakeController(
 	pvLister := pvs.Lister()
 	nodeLister := nodes.Lister()
 
-	return fakeTargetCoreClient, pvLister, pvcLister, nodeLister, targetCoreObjectTracker
+	nodesSynced := nodes.Informer().HasSynced
+
+	return fakeTargetCoreClient, pvLister, pvcLister, nodeLister, nodesSynced, targetCoreObjectTracker
 }

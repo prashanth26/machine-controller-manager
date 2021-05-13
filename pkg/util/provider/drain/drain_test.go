@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
 )
 
@@ -126,14 +127,16 @@ var _ = Describe("drain", func() {
 			targetCoreObjects = appendVolumeAttachments(targetCoreObjects, volumeAttachments)
 		}
 
-		fakeTargetCoreClient, fakePVLister, fakePVCLister, fakeNodeLister, tracker := createFakeController(
+		fakeTargetCoreClient, fakePVLister, fakePVCLister, fakeNodeLister, nodeSynced, tracker := createFakeController(
 			stop, testNamespace, targetCoreObjects,
 		)
 		defer tracker.Stop()
 
+		if !cache.WaitForCacheSync(stop, nodeSynced) {
+			klog.Error("Error")
+		}
 		// Waiting for cache sync
 		// TODO: Replace with actual call
-		// Expect(cache.WaitForCacheSync(stop, fakePVCLister)).To(BeTrue())
 		time.Sleep(time.Second)
 
 		maxEvictRetries := setup.maxEvictRetries
@@ -517,6 +520,7 @@ var _ = Describe("drain", func() {
 				// Because waitForDetach polling Interval is equal to terminationGracePeriodShort
 				minDrainDuration: terminationGracePeriodMedium,
 			}),
+		// TODO: Checknext
 		FEntry("Successful drain with support for eviction of pods with exclusive volumes with volume attachments",
 			&setup{
 				stats: stats{
@@ -957,6 +961,10 @@ func getVolumeAttachments(pvs []*corev1.PersistentVolume, nodeName string) []*st
 		pvName := pv.Name
 
 		volumeAttachment := &storagev1.VolumeAttachment{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "VolumeAttachment",
+				APIVersion: "v1",
+			},
 			ObjectMeta: metav1.ObjectMeta{
 				// TODO: Get random value
 				Name: "csi-old-" + pv.Name,
@@ -981,6 +989,11 @@ func getVolumeAttachments(pvs []*corev1.PersistentVolume, nodeName string) []*st
 
 func getNode(name string, pvs []*corev1.PersistentVolume) *corev1.Node {
 	n := &corev1.Node{
+		// TODO: Fill in with right values
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Node",
+			APIVersion: "v1",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
