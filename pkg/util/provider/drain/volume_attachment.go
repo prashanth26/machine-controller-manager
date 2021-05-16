@@ -27,13 +27,13 @@ import (
 
 type VolumeAttachmentHandler struct {
 	sync.Mutex
-	workers []chan storagev1.VolumeAttachment
+	workers []chan *storagev1.VolumeAttachment
 }
 
 func NewVolumeAttachmentHandler() *VolumeAttachmentHandler {
 	return &VolumeAttachmentHandler{
 		Mutex:   sync.Mutex{},
-		workers: []chan storagev1.VolumeAttachment{},
+		workers: []chan *storagev1.VolumeAttachment{},
 	}
 }
 
@@ -54,41 +54,41 @@ func (v *VolumeAttachmentHandler) dispatcher(obj interface{}) {
 	defer v.Unlock()
 
 	for i, worker := range v.workers {
-		klog.V(3).Infof("Dispatching request for PV %s to worker %d", *volumeAttachment.Spec.Source.PersistentVolumeName, i)
-		worker <- *volumeAttachment
+		klog.V(4).Infof("Dispatching request for PV %s to worker %d", *volumeAttachment.Spec.Source.PersistentVolumeName, i)
+		worker <- volumeAttachment
 	}
 }
 
 func (v *VolumeAttachmentHandler) AddVolumeAttachment(obj interface{}) {
-	klog.V(3).Infof("Adding volume attachment object")
+	klog.V(5).Infof("Adding volume attachment object")
 	v.dispatcher(obj)
 }
 
 func (v *VolumeAttachmentHandler) UpdateVolumeAttachment(oldObj, newObj interface{}) {
-	klog.V(3).Info("Updating volume attachment object")
+	klog.V(5).Info("Updating volume attachment object")
 	v.dispatcher(newObj)
 }
 
-func (v *VolumeAttachmentHandler) AddWorker() chan storagev1.VolumeAttachment {
-	klog.V(3).Infof("Adding new worker. Current active workers %d", len(v.workers))
+func (v *VolumeAttachmentHandler) AddWorker() chan *storagev1.VolumeAttachment {
+	klog.V(4).Infof("Adding new worker. Current active workers %d", len(v.workers))
 
 	v.Lock()
 	defer v.Unlock()
 
-	newWorker := make(chan storagev1.VolumeAttachment, 20)
+	newWorker := make(chan *storagev1.VolumeAttachment, 20)
 	v.workers = append(v.workers, newWorker)
 
-	klog.V(3).Infof("Successfully added new worker %v. Current active workers %d", newWorker, len(v.workers))
+	klog.V(4).Infof("Successfully added new worker %v. Current active workers %d", newWorker, len(v.workers))
 	return newWorker
 }
 
-func (v *VolumeAttachmentHandler) DeleteWorker(desiredWorker chan storagev1.VolumeAttachment) {
-	klog.V(3).Infof("Deleting an existing worker %v. Current active workers %d", desiredWorker, len(v.workers))
+func (v *VolumeAttachmentHandler) DeleteWorker(desiredWorker chan *storagev1.VolumeAttachment) {
+	klog.V(4).Infof("Deleting an existing worker %v. Current active workers %d", desiredWorker, len(v.workers))
 
 	v.Lock()
 	defer v.Unlock()
 
-	finalWorkers := []chan storagev1.VolumeAttachment{}
+	finalWorkers := []chan *storagev1.VolumeAttachment{}
 
 	for _, worker := range v.workers {
 		if worker == desiredWorker {
@@ -100,5 +100,5 @@ func (v *VolumeAttachmentHandler) DeleteWorker(desiredWorker chan storagev1.Volu
 	}
 
 	v.workers = finalWorkers
-	klog.V(3).Infof("Successfully removed worker. Current active workers %d", len(v.workers))
+	klog.V(4).Infof("Successfully removed worker. Current active workers %d", len(v.workers))
 }

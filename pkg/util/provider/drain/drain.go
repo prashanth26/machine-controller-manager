@@ -653,7 +653,7 @@ func (o *Options) evictPodsWithPVInternal(
 
 		var (
 			err                     error
-			volumeAttachmentEventCh chan storagev1.VolumeAttachment
+			volumeAttachmentEventCh chan *storagev1.VolumeAttachment
 			podEvictionStartTime    = time.Now()
 		)
 
@@ -857,9 +857,9 @@ func (o *Options) waitForDetach(ctx context.Context, podVolumeInfo PodVolumeInfo
 }
 
 func isDesiredReattachment(persistantVolumeName string, previousNodeName string, volumeAttachment *storagev1.VolumeAttachment) bool {
-	// klog.Errorf("Volume: %s, NODE: %s", *volumeAttachment.Spec.Source.PersistentVolumeName, volumeAttachment.Spec.NodeName)
+	// klog.Errorf("\nPV: %s = %s, \nAttached: %b, \nNode: %s = %s", *volumeAttachment.Spec.Source.PersistentVolumeName, persistantVolumeName, volumeAttachment.Status.Attached, volumeAttachment.Spec.NodeName, previousNodeName)
 	if *volumeAttachment.Spec.Source.PersistentVolumeName == persistantVolumeName && volumeAttachment.Status.Attached && volumeAttachment.Spec.NodeName != previousNodeName {
-		klog.V(3).Infof("ReattachmentSuccessful for PV: %q", persistantVolumeName)
+		klog.V(4).Infof("ReattachmentSuccessful for PV: %q", persistantVolumeName)
 		return true
 	}
 
@@ -867,23 +867,26 @@ func isDesiredReattachment(persistantVolumeName string, previousNodeName string,
 }
 
 // waitForReattachUsingVolumeAttachments waits for reattachment using volumeAttachments
-func (o *Options) waitForReattachUsingVolumeAttachments(ctx context.Context, persistantVolumeName string, previousNodeName string, reattached chan<- bool, volumeAttachmentEventCh chan storagev1.VolumeAttachment) {
-	select {
-	case incomingEvent := <-volumeAttachmentEventCh:
-		klog.V(3).Infof("VolumeAttachment event recieved for PV: %s", *incomingEvent.Spec.Source.PersistentVolumeName)
-		if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, &incomingEvent); reattachmentSuccess {
-			reattached <- true
+func (o *Options) waitForReattachUsingVolumeAttachments(ctx context.Context, persistantVolumeName string, previousNodeName string, reattached chan bool, volumeAttachmentEventCh chan *storagev1.VolumeAttachment) {
+	for {
+		select {
+		case <-ctx.Done():
+			klog.V(5).Infof("Context has been cancelled. Clean up performed for %q", persistantVolumeName)
+			return
+		case incomingEvent := <-volumeAttachmentEventCh:
+			klog.V(5).Infof("VolumeAttachment event recieved for PV: %s", *incomingEvent.Spec.Source.PersistentVolumeName)
+			if reattachmentSuccess := isDesiredReattachment(persistantVolumeName, previousNodeName, incomingEvent); reattachmentSuccess {
+				reattached <- true
+				return
+			}
 		}
-	case <-ctx.Done():
-		klog.V(3).Infof("Context has been cancelled. Clean up performed to stop informer: %q", persistantVolumeName)
-		return
 	}
 }
 
 // waitForReattach to consider 2 cases
 // 1. If CSI is enabled use determine reattach
 // 2. If all else fails, fallback to static timeout
-func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeInfo, previousNodeName string, volumeAttachmentEventCh chan storagev1.VolumeAttachment) error {
+func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeInfo, previousNodeName string, volumeAttachmentEventCh chan *storagev1.VolumeAttachment) error {
 	if len(podVolumeInfo.persistantVolumeList) == 0 {
 		// If volume or node name is not available, nothing to do. Just log this as warning
 		klog.Warningf("List of pod PVs waiting for reattachment is 0: %v", podVolumeInfo.persistantVolumeList)
@@ -895,7 +898,7 @@ func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeIn
 	for _, persistantVolumeName := range podVolumeInfo.persistantVolumeList {
 		reattached := make(chan bool, 1)
 
-		klog.V(3).Infof("Waiting for following volume %q to reattach", persistantVolumeName)
+		klog.V(4).Infof("Waiting for following volume %q to reattach", persistantVolumeName)
 
 		if volumeAttachmentEventCh != nil {
 			// If volumeAttachmentEventCh is initialized
