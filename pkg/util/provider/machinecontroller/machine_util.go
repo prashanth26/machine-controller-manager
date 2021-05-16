@@ -1011,6 +1011,7 @@ func (c *controller) drainNode(deleteMachineRequest *driver.DeleteMachineRequest
 				c.pvLister,
 				c.pdbLister,
 				c.nodeLister,
+				c.volumeAttachmentHandler,
 			)
 			err = drainOptions.RunDrain()
 			if err == nil {

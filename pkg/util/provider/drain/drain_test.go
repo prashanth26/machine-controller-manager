@@ -169,6 +169,7 @@ var _ = Describe("drain", func() {
 			pdbLister:                    nil,
 			nodeLister:                   fakeNodeLister,
 			Timeout:                      2 * time.Minute,
+			volumeAttachmentHandler:      NewVolumeAttachmentHandler(),
 		}
 
 		// Get the pod directly from the ObjectTracker to avoid locking issues in the Fake object.

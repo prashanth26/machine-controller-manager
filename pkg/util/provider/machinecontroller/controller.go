@@ -28,6 +28,7 @@ import (
 	machineinformers "github.com/gardener/machine-controller-manager/pkg/client/informers/externalversions/machine/v1alpha1"
 	machinelisters "github.com/gardener/machine-controller-manager/pkg/client/listers/machine/v1alpha1"
 	"github.com/gardener/machine-controller-manager/pkg/handlers"
+	"github.com/gardener/machine-controller-manager/pkg/util/k8sutils"
 	"github.com/gardener/machine-controller-manager/pkg/util/provider/drain"
 	"github.com/gardener/machine-controller-manager/pkg/util/provider/driver"
 	"github.com/gardener/machine-controller-manager/pkg/util/provider/options"
@@ -86,6 +87,15 @@ func NewController(
 	nodeConditions string,
 	bootstrapTokenAuthExtraGroups string,
 ) (Controller, error) {
+	const (
+		// volumeAttachmentGroupName group name
+		volumeAttachmentGroupName = "storage.k8s.io"
+		// volumenAttachmentKind is the kind used for VolumeAttachment
+		volumeAttachmentResourceName = "volumeattachments"
+		// volumeAttachmentResource is the kind used for VolumeAttachment
+		volumeAttachmentResourceKind = "VolumeAttachment"
+	)
+
 	controller := &controller{
 		namespace:                     namespace,
 		controlMachineClient:          controlMachineClient,
@@ -102,7 +112,7 @@ func NewController(
 		nodeConditions:                nodeConditions,
 		driver:                        driver,
 		bootstrapTokenAuthExtraGroups: bootstrapTokenAuthExtraGroups,
-		volumeAttachmentHandler:       drain.NewVolumeAttachmentHandler(),
+		volumeAttachmentHandler:       nil,
 	}
 
 	controller.internalExternalScheme = runtime.NewScheme()
@@ -190,10 +200,13 @@ func NewController(
 	})
 
 	// Drain Controller Informers
-	volumeAttachmentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    controller.volumeAttachmentHandler.AddVolumeAttachment,
-		UpdateFunc: controller.volumeAttachmentHandler.UpdateVolumeAttachment,
-	})
+	if k8sutils.IsResourceSupported(targetCoreClient, volumeAttachmentGroupName, volumeAttachmentResourceName, volumeAttachmentResourceKind) {
+		controller.volumeAttachmentHandler = drain.NewVolumeAttachmentHandler()
+		volumeAttachmentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc:    controller.volumeAttachmentHandler.AddVolumeAttachment,
+			UpdateFunc: controller.volumeAttachmentHandler.UpdateVolumeAttachment,
+		})
+	}
 
 	return controller, nil
 }

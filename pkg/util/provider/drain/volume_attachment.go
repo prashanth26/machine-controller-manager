@@ -38,16 +38,23 @@ func NewVolumeAttachmentHandler() *VolumeAttachmentHandler {
 }
 
 func (v *VolumeAttachmentHandler) dispatcher(obj interface{}) {
+	if len(v.workers) == 0 {
+		// As no workers are registered, nothing to do here.
+		return
+	}
+
 	volumeAttachment := obj.(*storagev1.VolumeAttachment)
 	if volumeAttachment == nil {
 		klog.Errorf("Couldn't convert to volumeAttachment from object %v", obj)
 	}
 
+	klog.V(3).Infof("Dispatching request for PV %s", *volumeAttachment.Spec.Source.PersistentVolumeName)
+
 	v.Lock()
 	defer v.Unlock()
 
 	for i, worker := range v.workers {
-		klog.V(3).Info("Dispatching request for PV %s to worker %d", volumeAttachment.Spec.Source.PersistentVolumeName, i)
+		klog.V(3).Infof("Dispatching request for PV %s to worker %d", *volumeAttachment.Spec.Source.PersistentVolumeName, i)
 		worker <- *volumeAttachment
 	}
 }
@@ -62,25 +69,36 @@ func (v *VolumeAttachmentHandler) UpdateVolumeAttachment(oldObj, newObj interfac
 	v.dispatcher(newObj)
 }
 
-func (v *VolumeAttachmentHandler) AddWorker(obj interface{}) *chan storagev1.VolumeAttachment {
+func (v *VolumeAttachmentHandler) AddWorker() chan storagev1.VolumeAttachment {
 	klog.V(3).Infof("Adding new worker. Current active workers %d", len(v.workers))
 
 	v.Lock()
 	defer v.Unlock()
 
-	newWorker := make(chan storagev1.VolumeAttachment)
+	newWorker := make(chan storagev1.VolumeAttachment, 20)
 	v.workers = append(v.workers, newWorker)
 
-	return &newWorker
+	klog.V(3).Infof("Successfully added new worker %v. Current active workers %d", newWorker, len(v.workers))
+	return newWorker
 }
 
-func (v *VolumeAttachmentHandler) DeleteWorker(*chan storagev1.VolumeAttachment) {
-	klog.V(3).Infof("Deleting an existing worker. Current active workers %d", len(v.workers))
+func (v *VolumeAttachmentHandler) DeleteWorker(desiredWorker chan storagev1.VolumeAttachment) {
+	klog.V(3).Infof("Deleting an existing worker %v. Current active workers %d", desiredWorker, len(v.workers))
 
 	v.Lock()
 	defer v.Unlock()
 
-	for i, worker := range v.workers {
+	finalWorkers := []chan storagev1.VolumeAttachment{}
+
+	for _, worker := range v.workers {
+		if worker == desiredWorker {
+			klog.V(3).Infof("Found worker to be deleted. Worker %s", worker)
+		} else {
+			finalWorkers = append(finalWorkers, worker)
+		}
 
 	}
+
+	v.workers = finalWorkers
+	klog.V(3).Infof("Successfully removed worker. Current active workers %d", len(v.workers))
 }
