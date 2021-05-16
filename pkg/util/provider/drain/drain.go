@@ -897,6 +897,7 @@ func (o *Options) waitForReattach(ctx context.Context, podVolumeInfo PodVolumeIn
 
 	for _, persistantVolumeName := range podVolumeInfo.persistantVolumeList {
 		reattached := make(chan bool, 1)
+		defer close(reattached)
 
 		klog.V(4).Infof("Waiting for following volume %q to reattach", persistantVolumeName)
 

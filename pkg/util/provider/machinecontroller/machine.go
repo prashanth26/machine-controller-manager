@@ -102,7 +102,7 @@ func (c *controller) reconcileClusterMachineKey(key string) error {
 	}
 
 	retryPeriod, err := c.reconcileClusterMachine(machine)
-	klog.V(4).Info(err, retryPeriod)
+	klog.V(5).Info(err, retryPeriod)
 
 	c.enqueueMachineAfter(machine, time.Duration(retryPeriod))
 
@@ -110,8 +110,8 @@ func (c *controller) reconcileClusterMachineKey(key string) error {
 }
 
 func (c *controller) reconcileClusterMachine(machine *v1alpha1.Machine) (machineutils.RetryPeriod, error) {
-	klog.V(4).Infof("Start Reconciling machine %q", machine.Name)
-	defer klog.V(4).Infof("Stop Reconciling machine %q", machine.Name)
+	klog.V(5).Infof("Start Reconciling machine %q", machine.Name)
+	defer klog.V(5).Infof("Stop Reconciling machine %q", machine.Name)
 
 	if c.safetyOptions.MachineControllerFrozen && machine.DeletionTimestamp == nil {
 		// If Machine controller is frozen and

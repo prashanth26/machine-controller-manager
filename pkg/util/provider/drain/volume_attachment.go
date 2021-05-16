@@ -90,13 +90,13 @@ func (v *VolumeAttachmentHandler) DeleteWorker(desiredWorker chan *storagev1.Vol
 
 	finalWorkers := []chan *storagev1.VolumeAttachment{}
 
-	for _, worker := range v.workers {
+	for i, worker := range v.workers {
 		if worker == desiredWorker {
-			klog.V(3).Infof("Found worker to be deleted. Worker %s", worker)
+			close(worker)
+			klog.V(4).Infof("Deleting worker %d from worker list", i)
 		} else {
 			finalWorkers = append(finalWorkers, worker)
 		}
-
 	}
 
 	v.workers = finalWorkers
