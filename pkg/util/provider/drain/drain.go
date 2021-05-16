@@ -739,7 +739,10 @@ func (o *Options) evictPodsWithPVInternal(
 			}
 		}
 
-		o.volumeAttachmentHandler.DeleteWorker(volumeAttachmentEventCh)
+		if o.volumeAttachmentHandler != nil {
+			o.volumeAttachmentHandler.DeleteWorker(volumeAttachmentEventCh)
+		}
+
 		klog.V(3).Infof(
 			"Pod + volume detachment + volume reattachment for Pod %s/%s took %v",
 			pod.Namespace,

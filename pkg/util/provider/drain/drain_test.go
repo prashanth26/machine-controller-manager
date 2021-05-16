@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/klog"
 )
 
 var _ = Describe("drain", func() {
@@ -119,9 +120,11 @@ var _ = Describe("drain", func() {
 		targetCoreObjects = appendPVs(targetCoreObjects, pvs)
 		targetCoreObjects = appendNodes(targetCoreObjects, nodes)
 
+		var volumeAttachmentHandler *VolumeAttachmentHandler
 		// If volumeAttachmentSupported is enabled
 		// setup volume attachments as well
 		if setup.volumeAttachmentSupported {
+			volumeAttachmentHandler = NewVolumeAttachmentHandler()
 			volumeAttachments := getVolumeAttachments(pvs, oldNodeName)
 			targetCoreObjects = appendVolumeAttachments(targetCoreObjects, volumeAttachments)
 		}
@@ -169,7 +172,7 @@ var _ = Describe("drain", func() {
 			pdbLister:                    nil,
 			nodeLister:                   fakeNodeLister,
 			Timeout:                      2 * time.Minute,
-			volumeAttachmentHandler:      NewVolumeAttachmentHandler(),
+			volumeAttachmentHandler:      volumeAttachmentHandler,
 		}
 
 		// Get the pod directly from the ObjectTracker to avoid locking issues in the Fake object.
@@ -1062,7 +1065,7 @@ func updateVolumeAttachments(drainOptions *Options, pvName string, nodeName stri
 	defer GinkgoRecover()
 
 	// TODO: re-introduce this delay to properly mock delay
-	// time.Sleep(time.Second * 5)
+	time.Sleep(time.Second * 5)
 
 	// Delete existing volume attachment
 	volumeAttachments, err := drainOptions.client.StorageV1().VolumeAttachments().List(metav1.ListOptions{})
@@ -1102,5 +1105,8 @@ func updateVolumeAttachments(drainOptions *Options, pvName string, nodeName stri
 
 	newVolumeAttachment, err = drainOptions.client.StorageV1().VolumeAttachments().UpdateStatus(newVolumeAttachment)
 	Expect(err).To(BeNil())
-	// klog.Error("Updated VAs")
+
+	drainOptions.volumeAttachmentHandler.AddVolumeAttachment(newVolumeAttachment)
+
+	klog.Error("Updated VAs")
 }
